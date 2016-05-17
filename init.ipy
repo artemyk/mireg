@@ -1,0 +1,19 @@
+%load_ext autoreload
+%autoreload 2
+%matplotlib inline
+import matplotlib.pyplot as plt
+import numpy as np
+import keras.backend as K
+from keras.models import Sequential
+from keras.layers.core import Dense, Activation
+
+import logging    
+logging.getLogger('keras').setLevel(logging.INFO)
+
+from keras.utils import np_utils
+
+def get_activations(model, layer, X_batch):
+    get_activations = K.function([model.layers[0].input, K.learning_phase()], [model.layers[layer].output,])
+    activations = get_activations([X_batch,0])
+    return activations
+
