@@ -6,8 +6,19 @@ from keras.layers import Dense
 from keras.layers import regularizers
 from keras.engine import InputSpec # , Layer, Merge
 
-import tensorflow as tf 
+from keras import backend
 
+if backend._BACKEND == 'tensorflow':
+    import tensorflow as tf 
+    def get_diag(t):
+        return tf.diag(t)
+    floatname = 'float'
+else:
+    import theano.tensor.nlinalg
+    def get_diag(t):
+        return theano.tensor.nlinalg.diag(t)
+    floatname = 'floatX'
+        
 # Mutual information regularizer
 class MIRegularizer(ActivityRegularizer):
     def __init__(self, alpha=0., var=1.0):
@@ -51,8 +62,8 @@ def logsumexp(mx):
 
 def kde_entropy(output, var):
     Nint = K.shape(output)[0]
-    N    = K.cast(Nint, 'float' )
-    dims = K.cast(K.shape(output)[1], 'float' )
+    N    = K.cast(Nint, floatname )
+    dims = K.cast(K.shape(output)[1], floatname )
     
     normconst = (dims/2)*K.log(2*np.pi*var)
             
@@ -63,7 +74,7 @@ def kde_entropy(output, var):
     dists = K.sum((y1-y2)**2, axis=2) / (2*var)
 
     # Removes effect of diagonals
-    diagvals = tf.diag(10e20*K.ones_like(K.sum(dists,axis=1)))
+    diagvals = get_diag(10e20*K.ones_like(K.sum(dists,axis=1)))
     dists = dists + diagvals
     
     lprobs = logsumexp(-dists) - K.log(N-1) - normconst

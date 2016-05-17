@@ -20,11 +20,11 @@ class LogvarHistory(keras.callbacks.Callback):
 alphavals = [0,]+list(10**np.linspace(-2,1,8))
 HIDDEN_DIM = 20
 ndx=0
-numepochs = 75
+numepochs = 60
 
 for alpha in alphavals:
     for trainablevar in [False, True]:
-        for initlogvar in np.linspace(-5, 5, 8):
+        for initlogvar in np.linspace(-4, 4, 5):
             for add_noise in [True, False]:
                 for entropy_only in [True, False]:
                     
