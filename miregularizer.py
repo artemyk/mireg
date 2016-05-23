@@ -87,11 +87,11 @@ def kde_entropy(output, var):
     
 class mireg(ActivityRegularizer):
     # Mutual information regularizer
-    def __init__(self, alpha, entropy_only):
-        self.alpha      = alpha          # weight of MI regularization
+    def __init__(self): #, alpha, entropy_only):
+        #self.alpha      = alpha          # weight of MI regularization
         # kde entropy for output from single input (delta function)
         self.uses_learning_phase = True
-        self.entropy_only = entropy_only # whether to compute entropy or MI
+        #self.entropy_only = entropy_only # whether to compute entropy or MI
         #self.randoutput = K.variable(np.random.random((250,50)))
 
     def __call__(self, loss):
@@ -100,11 +100,9 @@ class mireg(ActivityRegularizer):
         #output = self.randoutput
         
         c_loss, normconst = kde_entropy(output, var)
-        
-        if not self.entropy_only:
-            c_loss    -= normconst
+        c_loss = c_loss - (1 - self.layer.entropy_only) * normconst
             
-        regularized_loss = loss + self.alpha * c_loss
+        regularized_loss = loss + self.layer.alpha * c_loss
         
         return K.in_train_phase(regularized_loss, loss)
         
@@ -112,47 +110,58 @@ class mireg(ActivityRegularizer):
         return {'name': self.__class__.__name__}
     
 class MILayer(Dense):
-    def __init__(self, output_dim, input_dim=None, alpha=1.0, initlogvar=-2.0, trainablevar=True, entropy_only=False, add_noise=False, **kwargs):
-        self.output_dim = output_dim
-        self.input_dim = input_dim
-        self.activity_regularizer = regularizers.get(mireg(alpha,entropy_only))
-        self.entropy_only = entropy_only
-        self.add_noise = add_noise
-        self.initlogvar = initlogvar
-        self.trainablevar = trainablevar
+    def __init__(self, output_dim, input_dim=None, alpha=1.0, initlogvar=-2.0, entropy_only=False, add_noise=False, **kwargs):
+        self.output_dim   = output_dim
+        self.input_dim    = input_dim
+        self.activity_regularizer = mireg() # alpha,entropy_only)
+        
+        self.param_alpha        = alpha
+        self.param_initlogvar   = initlogvar
+        self.param_entropy_only = entropy_only
+        self.param_add_noise    = add_noise
         
         self.input_spec = [InputSpec(ndim=2)]
         if self.input_dim: kwargs['input_shape'] = (self.input_dim,)
         super(Dense, self).__init__(**kwargs)
 
+    def set_myparams(self, alpha, logvar, entropy_only, add_noise):
+        K.set_value(self.alpha, alpha)
+        K.set_value(self.logvar, float(logvar))
+        K.set_value(self.entropy_only, 1 if entropy_only else 0)
+        K.set_value(self.add_noise, 1 if add_noise else 0)
+        
+    def init_trainable_weights(self):
+        self.trainable_weights = []
+        
     def build(self, input_shape):
         assert len(input_shape) == 2
         input_dim = input_shape[1]
-        self.logvar = K.variable(self.initlogvar)
-        self.input_spec = [InputSpec(dtype=K.floatx(), shape=(None, input_dim))]
+
+        self.alpha        = K.variable(self.param_alpha)
+        self.entropy_only = K.variable(1 if self.param_entropy_only else 0)
+        self.add_noise    = K.variable(1 if self.param_add_noise else 0)
+        self.logvar       = K.variable(float(self.param_initlogvar))
+        self.init_trainable_weights()
         
-        if self.trainablevar:
-            self.trainable_weights = [self.logvar]
-        else:
-            self.trainable_weights = []
-            
+        self.input_spec = [InputSpec(dtype=K.floatx(), shape=(None, input_dim))]
+                    
         self.regularizers = []
         if self.activity_regularizer:
             self.activity_regularizer.set_layer(self)
             self.regularizers.append(self.activity_regularizer)
 
     def call(self, x, mask=None):
-        if self.add_noise:
-            noise_x = x + K.random_normal(shape=K.shape(x), mean=0., std=K.sqrt(K.exp(self.logvar)))
-            return K.in_train_phase(noise_x, x)
-        else:
-            return x
+        noise_x = x + self.add_noise * K.random_normal(shape=K.shape(x), mean=0., std=K.sqrt(K.exp(self.logvar)))
+        return K.in_train_phase(noise_x, x)
         
     def get_config(self):
         return {'name': self.__class__.__name__, 'alpha': self.alpha, 
-                'initlogvar': self.initlogvar,
-                'trainablevar': self.trainablevar,
-                'entropy_only': self.entropy_only,
-                'add_noise': self.add_noise,
+                'initlogvar'  : self.param_initlogvar,
+                'entropy_only': self.param_entropy_only,
+                'add_noise'   : self.param_add_noise,
                }
     
+class MILayerTrainable(MILayer):
+    def init_trainable_weights(self):
+        self.trainable_weights = [self.logvar]
+        
