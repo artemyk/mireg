@@ -1,9 +1,9 @@
-from sklearn.decomposition import PCA, FastICA
-import matplotlib.pyplot as plt
 import numpy as np
 from keras.utils import np_utils
 
 def plot_activity(d, activity, doPCA=True):
+    import matplotlib.pyplot as plt
+    from sklearn.decomposition import PCA, FastICA
     cl = PCA if doPCA else FastICA
     X_reduced = cl(n_components=2).fit_transform(activity)
     plt.figure(figsize=(10,10))
