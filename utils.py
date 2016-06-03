@@ -1,13 +1,19 @@
 import numpy as np
 from keras.utils import np_utils
+import keras.backend as K
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA, FastICA
 
-def plot_activity(d, activity, doPCA=True):
-    import matplotlib.pyplot as plt
-    from sklearn.decomposition import PCA, FastICA
+def get_activations(model, layer, X_batch):
+    get_activations = K.function([model.layers[0].input, K.learning_phase()], [model.layers[layer].output,])
+    activations = get_activations([X_batch,0])
+    return activations
+
+def plot_activity(activity, colors=None, doPCA=True):
     cl = PCA if doPCA else FastICA
     X_reduced = cl(n_components=2).fit_transform(activity)
     plt.figure(figsize=(10,10))
-    plt.scatter(X_reduced[:,0], X_reduced[:,1], s=.2,  edgecolor='none', c=d.y_train)
+    plt.scatter(X_reduced[:,0], X_reduced[:,1], s=.2,  edgecolor='none', c=colors)
     
 from keras.datasets import mnist
 
