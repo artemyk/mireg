@@ -3,11 +3,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from keras.utils import np_utils
 
-def plot_activity(activity, doPCA=True):
+def plot_activity(d, activity, doPCA=True):
     cl = PCA if doPCA else FastICA
     X_reduced = cl(n_components=2).fit_transform(activity)
     plt.figure(figsize=(10,10))
-    plt.scatter(X_reduced[:,0], X_reduced[:,1], s=.2,  edgecolor='none', c=y_train)
+    plt.scatter(X_reduced[:,0], X_reduced[:,1], s=.2,  edgecolor='none', c=d.y_train)
     
 from keras.datasets import mnist
 
