@@ -22,6 +22,7 @@ else:
 # Mutual information regularizer
 class MIRegularizer(ActivityRegularizer):
     def __init__(self, alpha=0., var=1.0):
+        super(MIRegularizer, self).__init__()
         f = K.cast_to_floatx
         self.alpha      = f(alpha)     # weight of MI regularization
         self.var        = f(var)       # KDE Gaussian variance
