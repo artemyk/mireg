@@ -1,6 +1,6 @@
 import numpy as np
 
-import keras.backend as K
+from keras.layers.core import K
 from keras.regularizers import ActivityRegularizer
 from keras.layers import Dense
 from keras.layers import regularizers
