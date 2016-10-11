@@ -1,6 +1,6 @@
 import numpy as np
 from keras.utils import np_utils
-import keras.backend as K
+from keras.layers.core import K
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA, FastICA
 
@@ -20,9 +20,14 @@ from keras.datasets import mnist
 class Data(object):
     pass
 
-def load_mnist():
+def load_mnist(max_train_items=None):
     #(X_train, y_train), (X_test, y_test) = cifar10.load_data()
     (X_train, y_train), (X_test, y_test) = mnist.load_data()
+    if max_train_items is not None:
+        skip_every = int(X_train.shape[0] / max_train_items)
+        X_train = X_train[::skip_every,:,:]
+        y_train = y_train[::skip_every]
+
     nb_classes = 10
 
     X_train = np.reshape(X_train, [X_train.shape[0], -1])
