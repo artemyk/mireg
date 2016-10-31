@@ -23,8 +23,25 @@ def plot_activity(activity, colors=None, doPCA=True, size=.2, dims=2, opts={}):
     
 from keras.datasets import mnist
 
-class Data(object):
-    pass
+class Datasets(object):
+    def __init__(self, train, test):
+        self.train = train
+        self.test = test
+        
+class ClassifierData(object):
+    def __init__(self, X, y, nb_classes, zero_mean=False):
+        self.X = X.copy()
+        if zero_mean:
+            self.X -= self.X.mean(axis=0)[None,:]
+            
+        self.y = y.copy()
+        self.Y = np_utils.to_categorical(y, nb_classes)
+        self.nb_classes = nb_classes
+        
+class RegressionData(object):
+    def __init__(self, X, Y):
+        self.X = X
+        self.Y = Y
 
 def load_mnist(max_train_items=None, max_test_items=None):
     #(X_train, y_train), (X_test, y_test) = cifar10.load_data()
@@ -40,21 +57,13 @@ def load_mnist(max_train_items=None, max_test_items=None):
 
     nb_classes = 10
 
-    X_train = np.reshape(X_train, [X_train.shape[0], -1])
-    X_train = X_train.astype('float32') / 255.0
-    X_train -= X_train.mean(axis=0)[None,:]
-    X_test  = np.reshape(X_test, [X_test.shape[0], -1])
-    X_test  = X_test.astype('float32') / 255.0
-    X_test -= X_test.mean(axis=0)[None,:]
+    X_train = np.reshape(X_train, [X_train.shape[0], -1]).astype('float32') / 255.0
+    X_test  = np.reshape(X_test, [X_test.shape[0], -1]).astype('float32') / 255.0
 
-    Y_train = np_utils.to_categorical(y_train, nb_classes)
-    Y_test  = np_utils.to_categorical(y_test, nb_classes)
-
-    d=Data()
-    d.X_train, d.X_test, d.Y_train, d.Y_test, d.y_train, d.y_test, d.nb_classes = \
-      X_train, X_test, Y_train, Y_test, y_train, y_test, nb_classes
+    trn = ClassifierData(X=X_train, y=y_train, nb_classes=nb_classes, zero_mean=True)
+    tst = ClassifierData(X=X_test , y=y_test , nb_classes=nb_classes, zero_mean=True)
     
-    return d
+    return Datasets(trn, tst)
 
 
 def load_mnist_rnn(max_train_items=None, max_test_items=None, normalize=True):
@@ -69,7 +78,6 @@ def load_mnist_rnn(max_train_items=None, max_test_items=None, normalize=True):
         X_test  = X_test[::skip_every_tst,:,:]
         y_test  = y_test[::skip_every_tst]
 
-
     X_train = X_train.astype('float32') / 255.0
     if normalize:
         X_train -= X_train.mean(axis=0)[None,:]
@@ -77,18 +85,14 @@ def load_mnist_rnn(max_train_items=None, max_test_items=None, normalize=True):
     if normalize:
         X_test -= X_test.mean(axis=0)[None,:]
     
-    d=Data()
-    d.X_train = X_train[:,8:,:].reshape([len(X_train), -1, 28*4])
-    d.X_test  = X_test[:,8:,:].reshape([len(X_test), -1, 28*4])
-    d.id_train = y_train
-    d.id_test = y_test
-    
-    d.Y_train = d.X_train.copy()
-    d.X_train = np.squeeze(d.X_train[:,0,:])
+    X_train = X_train[:,8:,:].reshape([len(X_train), -1, 28*4])
+    trn=RegressionData(X=np.squeeze(X_train[:,0,:]), Y=X_train)
+    trn.ids = y_train
 
-    d.Y_test = d.X_test.copy()
-    d.X_test = np.squeeze(d.X_test[:,0,:])
+    X_test = X_test[:,8:,:].reshape([len(X_test), -1, 28*4])
+    tst=RegressionData(X=np.squeeze(X_test[:,0,:]), Y=X_test)
+    tst.ids = y_test
     
-    return d
+    return Datasets(trn, tst)
 
 

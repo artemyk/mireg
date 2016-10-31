@@ -77,16 +77,21 @@ from keras.layers import Layer
 from keras.regularizers import ActivityRegularizer
 
 class MIRegularizer(ActivityRegularizer):
-    def __init__(self, layer):
+    def __init__(self, layer, traininput):
         super(MIRegularizer, self).__init__()
         self.layer = layer
-        
+        self.traininput = traininput
+
+    def get_input(self):
+        #return self.layer.input
+        return self.traininput
+    
     def get_h(self):
         totalvar = K.exp(self.layer.logvar)+K.exp(self.layer.kdelayer.logvar)
-        return kde_entropy(self.layer.input, totalvar)
+        return kde_entropy(self.get_input(), totalvar)
     
     def get_hcond(self):
-        return kde_condentropy(self.layer.input, K.exp(self.layer.logvar))
+        return kde_condentropy(self.get_input(), K.exp(self.layer.logvar))
     
     def get_mi(self):
         return self.get_h() - self.get_hcond()
@@ -102,17 +107,16 @@ class MIRegularizer(ActivityRegularizer):
     
 class GaussianNoise2(Layer):
     # with variable noise
-    def __init__(self, init_logvar, kdelayer, regularizemi=True, init_alpha=1.0, *kargs, **kwargs):
+    def __init__(self, traindata, init_logvar, kdelayer, regularizemi=True, init_alpha=1.0, *kargs, **kwargs):
         self.supports_masking = True
         self.init_logvar = init_logvar
         #self.uses_learning_phase = True
         self.kdelayer = kdelayer
         self.regularizemi = regularizemi
-        self.mi_obj = MIRegularizer(self)
+        self.mi_obj = MIRegularizer(self, K.variable(traindata.X))
         self.logvar = K.variable(0.0)
         self.init_alpha = init_alpha
         self.alpha = K.variable(0.0)
-        #self.traindata = traindata
         
         super(GaussianNoise2, self).__init__(*kargs, **kwargs)
         
@@ -120,8 +124,8 @@ class GaussianNoise2(Layer):
         super(GaussianNoise2, self).build(input_shape)
         K.set_value(self.logvar, self.init_logvar)
         K.set_value(self.alpha, self.init_alpha)
-        # self.trainable_weights = [self.logvar,]
-        self.trainable_weights = []
+        self.trainable_weights = [self.logvar,]
+        # self.trainable_weights = []
         if self.regularizemi:
             self.regularizers.append(self.mi_obj)
         
@@ -174,17 +178,17 @@ class NoiseTrain(Callback):
         inputs = modelobj.inputs + modelobj.targets + modelobj.sample_weights + [ K.learning_phase(),]
         lossfunc = K.function(inputs, [modelobj.total_loss])
         jacfunc  = K.function(inputs, K.gradients(modelobj.total_loss, self.noiselayer.logvar))
-        sampleweights = np.ones(len(self.traindata.X_train))
+        sampleweights = np.ones(len(self.traindata.X))
         def obj(logvar):
             v = K.get_value(self.noiselayer.logvar)
             K.set_value(self.noiselayer.logvar, logvar.flat[0])
-            r = lossfunc([self.traindata.X_train, self.traindata.Y_train, sampleweights, 1])[0]
+            r = lossfunc([self.traindata.X, self.traindata.Y, sampleweights, 1])[0]
             K.set_value(self.noiselayer.logvar, v)
             return r
         def jac(logvar):
             v = K.get_value(self.noiselayer.logvar)
             K.set_value(self.noiselayer.logvar, logvar.flat[0])
-            r = np.atleast_2d(np.array(jacfunc([self.traindata.X_train, self.traindata.Y_train, sampleweights, 1])))[0]
+            r = np.atleast_2d(np.array(jacfunc([self.traindata.X, self.traindata.Y, sampleweights, 1])))[0]
             K.set_value(self.noiselayer.logvar, v)
             return r
             
@@ -211,7 +215,7 @@ class KDETrain(Callback):
         
     def on_train_begin(self, logs={}):
         self.nlayerinput = lambda x: K.function([self.model.layers[0].input], [self.kdelayer.input])([x])[0]
-        N, dims = self.traindata.X_train.shape
+        N, dims = self.traindata.X.shape
         Kdists = K.placeholder(ndim=2)
         Klogvar = K.placeholder(ndim=0)
         def obj(logvar, dists):
@@ -238,7 +242,7 @@ class KDETrain(Callback):
         return dists
     
     def on_epoch_begin(self, epoch, logs={}):
-        vals = self.nlayerinput(self.traindata.X_train)
+        vals = self.nlayerinput(self.traindata.X)
         dists = self.get_dists(vals)
         dists += 10e20 * np.eye(dists.shape[0])
         r = scipy.optimize.minimize(self.obj, K.get_value(self.kdelayer.logvar).flat[0], 
@@ -305,7 +309,7 @@ class ReportVars(Callback):
         #self.losses += [ logs['kdeLV'] , logs['noiseLV'] , logs['mi_trn'] , logs['mi_tst'] ]
 """
 
-def get_logs(model, traindata, kdelayer, noiselayer):
+def get_logs(model, data, kdelayer, noiselayer):
     logs = {}
     mifunc = K.function([model.layers[0].input, K.learning_phase()], 
                         [noiselayer.mi_obj.get_mi(), 
@@ -314,10 +318,10 @@ def get_logs(model, traindata, kdelayer, noiselayer):
     modelobj = model.model
     inputs = modelobj.inputs + modelobj.targets + modelobj.sample_weights + [ K.learning_phase(),]
     lossfunc = K.function(inputs, [modelobj.total_loss])
-    sampleweightstrn = np.ones(len(traindata.X_train))
-    sampleweightstst = np.ones(len(traindata.X_test))
-    noreglosstrn = lambda: lossfunc([traindata.X_train, traindata.Y_train, sampleweightstrn, 0])[0]
-    noreglosstst = lambda: lossfunc([traindata.X_test , traindata.Y_test , sampleweightstst, 0])[0]
+    sampleweightstrn = np.ones(len(data.train.X))
+    sampleweightstst = np.ones(len(data.test.X))
+    noreglosstrn = lambda: lossfunc([data.train.X, data.train.Y, sampleweightstrn, 0])[0]
+    noreglosstst = lambda: lossfunc([data.test.X , data.test.Y , sampleweightstst, 0])[0]
 
     lv1 = K.get_value(kdelayer.logvar)
     lv2 = K.get_value(noiselayer.logvar)
@@ -325,9 +329,9 @@ def get_logs(model, traindata, kdelayer, noiselayer):
     logs['noiseLV'] = lv2
     print 'kdeLV=%.5f, noiseLV=%.5f' % (lv1, lv2),
     if True:
-        mivals_trn = map(float, mifunc([traindata.X_train,1]))
+        mivals_trn = map(float, mifunc([data.train.X,1]))
         logs['mi_trn'] = mivals_trn[0]
-        mivals_tst = map(float, mifunc([traindata.X_test,1]))
+        mivals_tst = map(float, mifunc([data.test.X,1]))
         logs['mi_tst'] = mivals_tst[0]
         logs['kl_trn'] = noreglosstrn()
         logs['kl_tst'] = noreglosstst()
