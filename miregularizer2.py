@@ -7,6 +7,8 @@ from keras.layers import Dense
 from keras.layers import regularizers
 from keras.engine import InputSpec # , Layer, Merge
 
+nats2bits = 1.0/np.log(2)
+
 if K._BACKEND == 'tensorflow':
     import tensorflow as tf 
     def get_diag(t):
@@ -52,14 +54,16 @@ def kde_entropy(output, var):
     
     h = -K.mean(lprobs)
     
-    return h # , normconst + (dims/2.0)
+    return nats2bits * h # , normconst + (dims/2.0)
 
 def kde_condentropy(output, var):
     dims = K.cast(K.shape(output)[1], K.floatx() ) # int(output.get_shape()[1])
-    #normconst = (dims/2.0)*K.log(2*np.pi*var)
-    #return normconst + (dims/2.0)
+    # #normconst = (dims/2.0)*K.log(2*np.pi*var)
+    # #return normconst + (dims/2.0)
     normconst = (dims/2.0)*K.log(2*np.pi*var)
-    return normconst
+    return nats2bits * normconst
+    #c = 0.5 * dims * K.log( 2 * np.pi * np.e * var )
+    #return nats2bits * c
 
 #def kde_mi(data, var, entropy_only=0):
 #    h, hcond = kde_entropy(data, var)
@@ -71,16 +75,48 @@ def kde_entropy_from_dists_loo(dists, N, dims, var):
     normconst = (dims/2.0)*K.log(2*np.pi*var)
     lprobs = logsumexp(-dists2, axis=1) - np.log(N-1) - normconst
     h = -K.mean(lprobs)
-    return h
+    return nats2bits * h
 
 from keras.layers import Layer
 from keras.regularizers import ActivityRegularizer
 
+class MIComputer(object):
+    def __init__(self, inputvar, kdelayer, noiselayer):
+        self.input = inputvar
+        self.kdelayer = kdelayer
+        self.noiselayer = noiselayer
+        
+    def get_h(self):
+        totalvar = K.exp(self.noiselayer.logvar)+K.exp(self.kdelayer.logvar)
+        return kde_entropy(self.input, totalvar)
+    
+    def get_hcond(self):
+        return kde_condentropy(self.input, K.exp(self.noiselayer.logvar))
+        #return kde_entropy(self.noiselayer.get_noise(self.input), K.exp(self.noiselayer.logvar))
+    
+    def get_mi(self):
+        return self.get_h() - self.get_hcond()
+    
+        
 class MIRegularizer(ActivityRegularizer):
-    def __init__(self, layer, traininput):
+    def __init__(self, micomputer, alpha):
+        super(MIRegularizer, self).__init__()
+        self.micomputer = micomputer
+        self.alpha = K.variable(alpha)
+        
+    def __call__(self, loss):
+        if not hasattr(self, 'layer'):
+            raise Exception('Need to call `set_layer` on ActivityRegularizer instance before calling the instance.')
+        mi = self.micomputer.get_mi()
+        regularized_loss = loss + self.alpha * mi
+        return K.in_train_phase(regularized_loss, loss)
+    
+    """
+    def __init__(self, layer, data):
         super(MIRegularizer, self).__init__()
         self.layer = layer
-        self.traininput = traininput
+        self.traindata = K.variable(d.train.X)
+        self.testdata  = K.variable(d.test.X)
 
     def get_input(self):
         #return self.layer.input
@@ -94,7 +130,7 @@ class MIRegularizer(ActivityRegularizer):
         return kde_condentropy(self.get_input(), K.exp(self.layer.logvar))
     
     def get_mi(self):
-        return self.get_h() - self.get_hcond()
+        return self.get_h(mode) - self.get_hcond()
     
     def __call__(self, loss):
         if not hasattr(self, 'layer'):
@@ -103,35 +139,56 @@ class MIRegularizer(ActivityRegularizer):
         mi = self.get_mi()
         regularized_loss = loss + self.layer.alpha * mi
         return K.in_train_phase(regularized_loss, loss)
-
+    """
     
 class GaussianNoise2(Layer):
     # with variable noise
-    def __init__(self, traindata, init_logvar, kdelayer, regularizemi=True, init_alpha=1.0, *kargs, **kwargs):
+    def __init__(self, init_logvar, kdelayer, 
+                 regularize_mi_input=None, 
+                 init_alpha=1.0, 
+                 get_noise_input_func=None, 
+                 trainable=True,
+                 *kargs, **kwargs):
         self.supports_masking = True
         self.init_logvar = init_logvar
         #self.uses_learning_phase = True
         self.kdelayer = kdelayer
-        self.regularizemi = regularizemi
-        self.mi_obj = MIRegularizer(self, K.variable(traindata.X))
+        #self.regularizemi = regularizemi
+        self.get_noise_input_func = get_noise_input_func
+        if regularize_mi_input is not None:
+            self.mi_regularizer = MIRegularizer(MIComputer(get_noise_input_func(regularize_mi_input), kdelayer=kdelayer, noiselayer=self),
+                                               alpha=init_alpha)
+        else:
+            self.mi_regularizer = None
         self.logvar = K.variable(0.0)
-        self.init_alpha = init_alpha
-        self.alpha = K.variable(0.0)
+        #self.init_alpha = init_alpha
+        #self.alpha = K.variable(0.0)
+        
+        self.is_trainable = trainable
         
         super(GaussianNoise2, self).__init__(*kargs, **kwargs)
         
     def build(self, input_shape):
         super(GaussianNoise2, self).build(input_shape)
         K.set_value(self.logvar, self.init_logvar)
-        K.set_value(self.alpha, self.init_alpha)
-        self.trainable_weights = [self.logvar,]
-        # self.trainable_weights = []
-        if self.regularizemi:
-            self.regularizers.append(self.mi_obj)
+        #K.set_value(self.alpha, self.init_alpha)
         
+        if self.is_trainable:
+            self.trainable_weights = [self.logvar,]
+        else:
+            self.trainable_weights = []
+            
+        if self.mi_regularizer:
+            self.regularizers.append(self.mi_regularizer)
+        
+    def get_noise(self, x):
+        #if not hasattr(self, 'saved_noise'):
+        #    self.saved_noise = K.random_normal(shape=K.shape(x), mean=0., std=1)
+        return K.exp(0.5*self.logvar) * K.random_normal(shape=K.shape(x), mean=0., std=1)
+    
     def call(self, x, mask=None):
-        noise_x = x + K.sqrt(K.exp(self.logvar)) * K.random_normal(shape=K.shape(x), mean=0., std=1)
-        return K.in_train_phase(noise_x, x)
+        print self.input_spec
+        return x+self.get_noise(x) # return K.in_train_phase(x+noise, x)
 
 class KDEParamLayer(Layer):
     # with variable noise
@@ -208,14 +265,14 @@ class NoiseTrain(Callback):
         #print 'noiseLV=%.5f' % K.get_value(self.noiselayer.logvar)
         
 class KDETrain(Callback):
-    def __init__(self, traindata, kdelayer, *kargs, **kwargs):
+    def __init__(self, entropy_train_data, kdelayer, *kargs, **kwargs):
         super(KDETrain, self).__init__(*kargs, **kwargs)
         self.kdelayer = kdelayer
-        self.traindata = traindata
+        self.entropy_train_data = entropy_train_data
         
     def on_train_begin(self, logs={}):
         self.nlayerinput = lambda x: K.function([self.model.layers[0].input], [self.kdelayer.input])([x])[0]
-        N, dims = self.traindata.X.shape
+        N, dims = self.entropy_train_data.shape
         Kdists = K.placeholder(ndim=2)
         Klogvar = K.placeholder(ndim=0)
         def obj(logvar, dists):
@@ -242,7 +299,7 @@ class KDETrain(Callback):
         return dists
     
     def on_epoch_begin(self, epoch, logs={}):
-        vals = self.nlayerinput(self.traindata.X)
+        vals = self.nlayerinput(self.entropy_train_data)
         dists = self.get_dists(vals)
         dists += 10e20 * np.eye(dists.shape[0])
         r = scipy.optimize.minimize(self.obj, K.get_value(self.kdelayer.logvar).flat[0], 
@@ -265,56 +322,13 @@ class ReportVars(Callback):
         lv2 = K.get_value(self.noiselayer.logvar)
         logs['kdeLV']   = lv1
         logs['noiseLV'] = lv2
-        print 'kdeLV=%.5f, noiseLV=%.5f' % (lv1, lv2)       
-"""
-class ReportVars(Callback):
-    def __init__(self, model, traindata, kdelayer, noiselayer, *kargs, **kwargs):
-        super(ReportVars, self).__init__(*kargs, **kwargs)
-        self.noiselayer = noiselayer
-        self.kdelayer = kdelayer
-        self.mifunc = None
-        self.traindata = traindata
-        
-    def on_train_begin(self, logs={}):
-        self.mifunc = K.function([self.model.layers[0].input, K.learning_phase()], 
-                                 [self.noiselayer.mi_obj.get_mi(), 
-                                  self.noiselayer.mi_obj.get_h(),
-                                  self.noiselayer.mi_obj.get_hcond()])
-        modelobj = self.model.model
-        inputs = modelobj.inputs + modelobj.targets + modelobj.sample_weights + [ K.learning_phase(),]
-        lossfunc = K.function(inputs, [modelobj.total_loss])
-        sampleweightstrn = np.ones(len(self.traindata.X_train))
-        sampleweightstst = np.ones(len(self.traindata.X_test))
-        self.noreglosstrn = lambda: lossfunc([self.traindata.X_train, self.traindata.Y_train, sampleweightstrn, 0])[0]
-        self.noreglosstst = lambda: lossfunc([self.traindata.X_test , self.traindata.Y_test , sampleweightstst, 0])[0]
-        
-    def on_train_end(self, epoch, logs={}):
-        lv1 = K.get_value(self.kdelayer.logvar)
-        lv2 = K.get_value(self.noiselayer.logvar)
-        logs['kdeLV']   = lv1
-        logs['noiseLV'] = lv2
-        print 'kdeLV=%.5f, noiseLV=%.5f' % (lv1, lv2),
-        if True:
-            mivals_trn = map(float, self.mifunc([self.traindata.X_train,1]))
-            logs['mi_trn'] = mivals_trn[0]
-            mivals_tst = map(float, self.mifunc([self.traindata.X_test,1]))
-            logs['mi_tst'] = mivals_tst[0]
-            logs['kl_trn'] = self.noreglosstrn()
-            logs['kl_tst'] = self.noreglosstst()
-            print ', mitrn=%s, mitst=%s, kltrn=%.3f, kltst=%.3f' % (mivals_trn, mivals_tst, logs['kl_trn'], logs['kl_tst'])
-        else:
-            print
-        #logs['tstloss'] = self.totalloss([self.traindata.X_test,0])
-        
-        #self.losses += [ logs['kdeLV'] , logs['noiseLV'] , logs['mi_trn'] , logs['mi_tst'] ]
-"""
+        print 'kdeLV=%.5f, noiseLV=%.5f' % (lv1, lv2)  
 
-def get_logs(model, data, kdelayer, noiselayer):
+from utils import randsample
+import tensorflow as tf
+def get_logs(model, data, kdelayer, noiselayer, max_entropy_calc_N=None):
     logs = {}
-    mifunc = K.function([model.layers[0].input, K.learning_phase()], 
-                        [noiselayer.mi_obj.get_mi(), 
-                         noiselayer.mi_obj.get_h(),
-                         noiselayer.mi_obj.get_hcond()])
+
     modelobj = model.model
     inputs = modelobj.inputs + modelobj.targets + modelobj.sample_weights + [ K.learning_phase(),]
     lossfunc = K.function(inputs, [modelobj.total_loss])
@@ -328,10 +342,22 @@ def get_logs(model, data, kdelayer, noiselayer):
     logs['kdeLV']   = lv1
     logs['noiseLV'] = lv2
     print 'kdeLV=%.5f, noiseLV=%.5f' % (lv1, lv2),
+    
+    
+    if max_entropy_calc_N is None:
+        mitrn = data.train.X
+        mitst = data.test.X
+    else:
+        mitrn = randsample(data.train.X, max_entropy_calc_N)
+        mitst = randsample(data.test.X, max_entropy_calc_N)
+    
+    mi_obj_trn = MIComputer(noiselayer.get_noise_input_func(mitrn), kdelayer=kdelayer, noiselayer=noiselayer)
+    mi_obj_tst = MIComputer(noiselayer.get_noise_input_func(mitst), kdelayer=kdelayer, noiselayer=noiselayer)
+    
     if True:
-        mivals_trn = map(float, mifunc([data.train.X,1]))
+        mivals_trn = map(lambda x: float(K.eval(x)), [mi_obj_trn.get_mi(), mi_obj_trn.get_h(), mi_obj_trn.get_hcond()]) # [data.train.X,]))
         logs['mi_trn'] = mivals_trn[0]
-        mivals_tst = map(float, mifunc([data.test.X,1]))
+        mivals_tst = map(lambda x: float(K.eval(x)), [mi_obj_tst.get_mi(), mi_obj_tst.get_h(), mi_obj_tst.get_hcond()]) # [data.train.X,]))
         logs['mi_tst'] = mivals_tst[0]
         logs['kl_trn'] = noreglosstrn()
         logs['kl_tst'] = noreglosstst()
@@ -340,5 +366,5 @@ def get_logs(model, data, kdelayer, noiselayer):
         print
         
     return logs
-    #logs['tstloss'] = self.totalloss([self.traindata.X_test,0])
+    #logs['tstloss'] = self.totalloss([self.xX_test,0])
         

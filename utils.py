@@ -4,6 +4,12 @@ from keras.layers.core import K
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA, FastICA
 
+def randsample(mx, maxN, axis=0, replace=False):
+    if axis not in [0,1]:
+        raise Exception('axis should be in [0,1]')
+    ixs = np.random.choice(np.arange(mx.shape[axis],dtype='int'), size=maxN, replace=replace)
+    return mx[ixs,:] if axis == 0 else mx[:,ixs]
+    
 def get_activations(model, layer, X_batch):
     get_activations = K.function([model.layers[0].input, K.learning_phase()], [model.layers[layer].output,])
     activations = get_activations([X_batch,0])
@@ -43,9 +49,16 @@ class RegressionData(object):
         self.X = X
         self.Y = Y
 
-def load_mnist(max_train_items=None, max_test_items=None):
+def load_mnist(max_train_items=None, max_test_items=None, keep_classes = None):
     #(X_train, y_train), (X_test, y_test) = cifar10.load_data()
     (X_train, y_train), (X_test, y_test) = mnist.load_data()
+    if keep_classes is not None:
+        keep_classes_set = set(keep_classes)
+        X_train = X_train[np.array([c in keep_classes_set for c in y_train]),:,:]
+        y_train = y_train[np.array([c in keep_classes_set for c in y_train])]
+        X_test  = X_test[ np.array([c in keep_classes_set for c in y_test]),:,:]
+        y_test  = y_test[ np.array([c in keep_classes_set for c in y_test])]
+        
     if max_train_items is not None:
         skip_every_trn = int(X_train.shape[0] / max_train_items)
         X_train = X_train[::skip_every_trn,:,:]

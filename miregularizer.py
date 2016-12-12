@@ -84,7 +84,14 @@ def kde_entropy(output, var):
     
     return h, normconst
     
-
+def kde_condentropy(output, var):
+    dims = K.cast(K.shape(output)[1], K.floatx() ) # int(output.get_shape()[1])
+    # #normconst = (dims/2.0)*K.log(2*np.pi*var)
+    # #return normconst + (dims/2.0)
+    normconst = (dims/2.0)*K.log(2*np.pi*var)
+    return normconst
+    #c = 0.5 * dims * K.log( 2 * np.pi * np.e * var )
+    #return nats2bits * c
     
 class mireg(ActivityRegularizer):
     # Mutual information regularizer
