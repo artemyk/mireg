@@ -2,23 +2,43 @@ import numpy as np
 from keras.utils import np_utils
 from keras.layers.core import K
 import matplotlib.pyplot as plt
-from sklearn.decomposition import PCA, FastICA
+import sklearn.decomposition, sklearn.manifold
 
-def randsample(mx, maxN, axis=0, replace=False):
+def randsample(mx, maxN, axis=0, replace=False, return_ixs=False):
     if axis not in [0,1]:
         raise Exception('axis should be in [0,1]')
     ixs = np.random.choice(np.arange(mx.shape[axis],dtype='int'), size=maxN, replace=replace)
-    return mx[ixs,:] if axis == 0 else mx[:,ixs]
+    r = mx[ixs,:] if axis == 0 else mx[:,ixs]
+    if return_ixs:
+        return r, ixs
+    else:
+        return r
     
 def get_activations(model, layer, X_batch):
     get_activations = K.function([model.layers[0].input, K.learning_phase()], [model.layers[layer].output,])
     activations = get_activations([X_batch,0])
     return activations
 
-def plot_activity(activity, colors=None, doPCA=True, size=.2, dims=2, opts={}):
+def plot_activity(activity, colors=None, method='pca', size=.2, dims=2, opts={}):
     if dims not in [2,3]:
         raise Exception('dims must be in [2,3]')
-    cl = PCA if doPCA else FastICA
+    if method == 'pca':
+        cl = sklearn.decomposition.PCA
+    elif method == 'ica':
+        cl = sklearn.decomposition.FastICA
+    elif method == 'tsne':
+        cl = sklearn.manifold.TSNE
+    elif method == 'lle':
+        cl = sklearn.manifold.LocallyLinearEmbedding
+    elif method == 'spectral':
+        cl = sklearn.manifold.SpectralEmbedding
+    elif method == 'isomap':
+        cl = sklearn.manifold.Isomap
+    elif method == 'mds':
+        cl = sklearn.manifold.MDS
+    else:
+        raise Exception('Unknown method %s'% method)
+        
     X_reduced = cl(n_components=dims, **opts).fit_transform(activity)
     #plt.figure(figsize=(10,10))
     kargs = [X_reduced[:,0], X_reduced[:,1]]
@@ -49,7 +69,7 @@ class RegressionData(object):
         self.X = X
         self.Y = Y
 
-def load_mnist(max_train_items=None, max_test_items=None, keep_classes = None):
+def load_mnist(max_train_items=None, max_test_items=None, keep_classes = None, zero_mean=False):
     #(X_train, y_train), (X_test, y_test) = cifar10.load_data()
     (X_train, y_train), (X_test, y_test) = mnist.load_data()
     if keep_classes is not None:
@@ -70,11 +90,21 @@ def load_mnist(max_train_items=None, max_test_items=None, keep_classes = None):
 
     nb_classes = 10
 
-    X_train = np.reshape(X_train, [X_train.shape[0], -1]).astype('float32') / 255.0
-    X_test  = np.reshape(X_test, [X_test.shape[0], -1]).astype('float32') / 255.0
-
-    trn = ClassifierData(X=X_train, y=y_train, nb_classes=nb_classes, zero_mean=True)
-    tst = ClassifierData(X=X_test , y=y_test , nb_classes=nb_classes, zero_mean=True)
+    X_train = np.reshape(X_train, [X_train.shape[0], -1]).astype('float32')
+    X_test  = np.reshape(X_test, [X_test.shape[0], -1]).astype('float32')
+    
+    X_train /= 255.
+    X_test /= 255.
+    
+    #print "Performing z-transformation"
+    #from sklearn import preprocessing
+    #X_train = preprocessing.scale(X_train)
+    #X_test  = preprocessing.scale(X_test)
+    #print X_train.mean(axis=0)
+    #print X_train.mean(axis=0).shape
+    
+    trn = ClassifierData(X=X_train, y=y_train, nb_classes=nb_classes, zero_mean=zero_mean)
+    tst = ClassifierData(X=X_test , y=y_test , nb_classes=nb_classes, zero_mean=zero_mean)
     
     return Datasets(trn, tst)
 

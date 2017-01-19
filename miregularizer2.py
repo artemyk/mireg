@@ -104,12 +104,13 @@ class MIRegularizer(ActivityRegularizer):
         self.micomputer = micomputer
         self.alpha = K.variable(alpha)
         
-    def __call__(self, loss):
+    def get_mi_loss(self):
         if not hasattr(self, 'layer'):
             raise Exception('Need to call `set_layer` on ActivityRegularizer instance before calling the instance.')
-        mi = self.micomputer.get_mi()
-        regularized_loss = loss + self.alpha * mi
-        return K.in_train_phase(regularized_loss, loss)
+        return K.in_train_phase(self.alpha * self.micomputer.get_mi(), 0)
+        
+    #def __call__(self, loss):
+    #    return loss + self.get_mi_loss()
     
     """
     def __init__(self, layer, data):
@@ -148,12 +149,12 @@ class GaussianNoise2(Layer):
                  init_alpha=1.0, 
                  get_noise_input_func=None, 
                  trainable=True,
+                 test_phase_noise=True,
                  *kargs, **kwargs):
         self.supports_masking = True
         self.init_logvar = init_logvar
         #self.uses_learning_phase = True
         self.kdelayer = kdelayer
-        #self.regularizemi = regularizemi
         self.get_noise_input_func = get_noise_input_func
         if regularize_mi_input is not None:
             self.mi_regularizer = MIRegularizer(MIComputer(get_noise_input_func(regularize_mi_input), kdelayer=kdelayer, noiselayer=self),
@@ -165,6 +166,7 @@ class GaussianNoise2(Layer):
         #self.alpha = K.variable(0.0)
         
         self.is_trainable = trainable
+        self.test_phase_noise = test_phase_noise
         
         super(GaussianNoise2, self).__init__(*kargs, **kwargs)
         
@@ -179,7 +181,7 @@ class GaussianNoise2(Layer):
             self.trainable_weights = []
             
         if self.mi_regularizer:
-            self.regularizers.append(self.mi_regularizer)
+            self.add_loss(self.mi_regularizer())
         
     def get_noise(self, x):
         #if not hasattr(self, 'saved_noise'):
@@ -187,8 +189,10 @@ class GaussianNoise2(Layer):
         return K.exp(0.5*self.logvar) * K.random_normal(shape=K.shape(x), mean=0., std=1)
     
     def call(self, x, mask=None):
-        print self.input_spec
-        return x+self.get_noise(x) # return K.in_train_phase(x+noise, x)
+        if self.test_phase_noise:
+            return x+self.get_noise(x)
+        else:
+            return K.in_train_phase(x+self.get_noise(x), x)
 
 class KDEParamLayer(Layer):
     # with variable noise
@@ -337,33 +341,37 @@ def get_logs(model, data, kdelayer, noiselayer, max_entropy_calc_N=None):
     noreglosstrn = lambda: lossfunc([data.train.X, data.train.Y, sampleweightstrn, 0])[0]
     noreglosstst = lambda: lossfunc([data.test.X , data.test.Y , sampleweightstst, 0])[0]
 
-    lv1 = K.get_value(kdelayer.logvar)
-    lv2 = K.get_value(noiselayer.logvar)
-    logs['kdeLV']   = lv1
-    logs['noiseLV'] = lv2
-    print 'kdeLV=%.5f, noiseLV=%.5f' % (lv1, lv2),
+    if kdelayer is not None:
+        lv1 = K.get_value(kdelayer.logvar)
+        logs['kdeLV']   = lv1
+        print 'kdeLV=%.5f,' % lv1,
+        
+    if noiselayer is not None:
+        lv2 = K.get_value(noiselayer.logvar)
+        logs['noiseLV'] = lv2
+        print 'noiseLV=%.5f' % lv2
     
-    
-    if max_entropy_calc_N is None:
-        mitrn = data.train.X
-        mitst = data.test.X
-    else:
-        mitrn = randsample(data.train.X, max_entropy_calc_N)
-        mitst = randsample(data.test.X, max_entropy_calc_N)
-    
-    mi_obj_trn = MIComputer(noiselayer.get_noise_input_func(mitrn), kdelayer=kdelayer, noiselayer=noiselayer)
-    mi_obj_tst = MIComputer(noiselayer.get_noise_input_func(mitst), kdelayer=kdelayer, noiselayer=noiselayer)
-    
-    if True:
-        mivals_trn = map(lambda x: float(K.eval(x)), [mi_obj_trn.get_mi(), mi_obj_trn.get_h(), mi_obj_trn.get_hcond()]) # [data.train.X,]))
-        logs['mi_trn'] = mivals_trn[0]
-        mivals_tst = map(lambda x: float(K.eval(x)), [mi_obj_tst.get_mi(), mi_obj_tst.get_h(), mi_obj_tst.get_hcond()]) # [data.train.X,]))
-        logs['mi_tst'] = mivals_tst[0]
-        logs['kl_trn'] = noreglosstrn()
-        logs['kl_tst'] = noreglosstst()
-        print ', mitrn=%s, mitst=%s, kltrn=%.3f, kltst=%.3f' % (mivals_trn, mivals_tst, logs['kl_trn'], logs['kl_tst'])
-    else:
-        print
+    if kdelayer is not None and noiselayer is not None:
+        if max_entropy_calc_N is None:
+            mitrn = data.train.X
+            mitst = data.test.X
+        else:
+            mitrn = randsample(data.train.X, max_entropy_calc_N)
+            mitst = randsample(data.test.X, max_entropy_calc_N)
+
+        mi_obj_trn = MIComputer(noiselayer.get_noise_input_func(mitrn), kdelayer=kdelayer, noiselayer=noiselayer)
+        mi_obj_tst = MIComputer(noiselayer.get_noise_input_func(mitst), kdelayer=kdelayer, noiselayer=noiselayer)
+
+        if True:
+            mivals_trn = map(lambda x: float(K.eval(x)), [mi_obj_trn.get_mi(), mi_obj_trn.get_h(), mi_obj_trn.get_hcond()]) # [data.train.X,]))
+            logs['mi_trn'] = mivals_trn[0]
+            mivals_tst = map(lambda x: float(K.eval(x)), [mi_obj_tst.get_mi(), mi_obj_tst.get_h(), mi_obj_tst.get_hcond()]) # [data.train.X,]))
+            logs['mi_tst'] = mivals_tst[0]
+            logs['kl_trn'] = noreglosstrn()
+            logs['kl_tst'] = noreglosstst()
+            print ', mitrn=%s, mitst=%s, kltrn=%.3f, kltst=%.3f' % (mivals_trn, mivals_tst, logs['kl_trn'], logs['kl_tst'])
+        else:
+            print
         
     return logs
     #logs['tstloss'] = self.totalloss([self.xX_test,0])
